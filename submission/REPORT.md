@@ -1,6 +1,4 @@
-# Báo cáo Day 09 — <Họ và tên>, <MSHV>
-
-> Xoá mọi `TODO(học viên)` và dòng gợi ý. Mỗi ý trả lời bằng **số lấy từ `submission/reports/`**, kèm mẫu số. Cả báo cáo ~1–2 trang.
+# Báo cáo Day 09 — Hà Tiến Trịnh, 2A202603154
 
 ## 1. Kết luận trước
 **HOLD** (mã thoát 10). **224 ảnh vào → 202 ảnh ra** `submission/export/clean_v1` (bản nháp, chưa phát hành); 22 ảnh bị loại ở cửa vào.
@@ -98,11 +96,32 @@ Các điểm mù có bằng chứng:
 4. **Ngân sách duyệt**: 29 ảnh có lỗi ngữ nghĩa nằm ngoài 80 ảnh được xem. Lỗi trên các ảnh này đi thẳng vào dataset nếu ép Release.
 
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
-Chưa train: ghi "chưa chạy" và lý do, rồi bỏ qua phần còn lại của mục này. Nếu đã train: dán bảng từ `submission/results/comparison.md` (model, epoch, seed, số ảnh train mỗi biến thể).
+**Chưa chạy.** Đã push `submission/export/clean_v1/` (kèm `manifest.json`) lên repo public và thử chạy `notebooks/day09_train_compare.ipynb` trên Colab, nhưng không hoàn thành được trong thời gian làm bài.
+Vì vậy `submission/results/` để trống và **không có kết luận nào về việc `clean` tốt hơn `raw`**.
 
-TODO(học viên): chênh mAP50 (clean − raw) so với **độ lệch chuẩn giữa các seed**; kết luận **trung thực** (nằm trong nhiễu thì nói là chưa kết luận được); ≥ 2 giả thuyết giải thích (ảnh trùng/rò rỉ test trong `raw`, nhãn máy còn lại trong `clean`, test chỉ 100 ảnh…) và cách kiểm.
+Nếu chạy lại, những gì cần kiểm (chưa có số liệu, chỉ là giả thuyết):
+- `raw` chứa 5 ảnh `LEAK_TEST` trùng với tập test, nên mAP của `raw` có thể bị thổi phồng.
+- `clean` vẫn còn 38 ảnh có cảnh báo chưa người duyệt.
+- Test chỉ có 100 ảnh với 2 seed, nên chênh lệch rất có thể nằm trong nhiễu.
 
 ## 6. Quyết định và ghi chú AI
-TODO(học viên): (a) quyết định cuối; nếu Hold/Rework cần làm gì để thành Release? (b) Dùng AI viết code? Ghi 3 dòng: prompt chính, cách bạn kiểm code AI, 1 lần AI sai. Không dùng: ghi "không dùng".
+**(a) Quyết định cuối: HOLD.** `clean_v1` chỉ là bản nháp để thử nghiệm, **chưa phát hành**.
+
+Khớp số liệu: 0 lỗi bắt buộc, 38/202 ảnh (18,8%) còn cảnh báo chưa duyệt ≥ 10%.
+
+Điều kiện để đổi quyết định:
+- **Thành Release:** số ảnh còn cảnh báo chưa duyệt phải ≤ 20/202 (< 10%). Tức là người duyệt cần xem thêm **ít nhất 18 ảnh** trong 45 ảnh còn lại của `05_review_queue.csv` (ưu tiên 29 ảnh có `POSSIBLE_*`), ví dụ bằng một vòng duyệt thứ hai hoặc tăng ngân sách duyệt trong guideline dự án. **Không** đạt Release bằng cách nâng `second_opinion.conf` lên 0.8: cách đó chỉ giấu cảnh báo (xem §3).
+- **Thành Rework:** nếu người duyệt không gán nhãn cho 6 ảnh `NEEDS_LABEL` (đã chứng minh ở §4a), hoặc vòng duyệt sau làm phát sinh lỗi bắt buộc mới.
+- **Trước khi phát hành** nên có người xem riêng các điểm mù ở §4b (img_0005, img_0020, img_0045, cặp img_0084/img_0074), vì máy không cờ chúng.
+
+**(b) Ghi chú dùng AI** (Claude Code, trợ lý lập trình trong VS Code):
+1. **Prompt chính:** "đọc repo và hướng dẫn; viết `label_format.py` / `gate.py` / `autofix.py` / `second_opinion.py` theo docstring và test có sẵn". Tôi cùng AI đọc từng test trước khi viết.
+2. **Cách kiểm:**
+   - `pytest` 79/79.
+   - Tự thử thêm 3 ca ngoài test: dòng trống ở giữa file, một dòng dính 2 lỗi (tràn + trùng), chạy check trên `data/raw`.
+   - Chạy `pipeline.run` rồi đọc `03_fixes.csv` (trước → sau) và đối chiếu với 4 ảnh tự xem bằng `viz_labels.py`.
+   - Mở ảnh từng cặp bị cho là trùng trước khi chọn `phash_dist`.
+3. **Một lần AI chưa đúng:** *(bạn tự điền một ca thật bạn gặp)*.
+   Nếu không có, ghi trung thực: code AI qua test ngay, nhưng `second_opinion` vẫn bỏ sót lỗi ngữ nghĩa (img_0020 người trong gương, img_0005), và `check_submission.py` báo lỗi giả trên Windows với `calibrate.py` (file viết sẵn, sha1 khớp bản gốc; nguyên nhân là đường dẫn `\` khác `/`).
 
 *(Thưởng +2, tùy chọn)* CVAT: lọc `width < 20`, ảnh/số box khớp, đối chiếu `BOX_TINY` (xem docs/CVAT_FILTER.md), 1 câu về `can_review`.
