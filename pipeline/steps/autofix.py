@@ -33,7 +33,103 @@ import yaml  # noqa: F401
 
 from ..common import ERROR, parse_yolo_line  # noqa: F401
 
+DROP_CODES = {"BAD_FORMAT", "BAD_CLASS_ID", "BOX_ZERO", "DUP_BOX"}
+CLIP_CODES = {"BOX_OUT_OF_IMAGE"}
+REMOVE_CODES = {"DUP_IMAGE_EXACT", "DUP_IMAGE_NEAR", "LEAK_TEST", "CORRUPT_IMAGE", "BAD_SIZE"}
+
+
+def _fmt(cid, x, y, w, h):
+    return f"{cid} {x:.6f} {y:.6f} {w:.6f} {h:.6f}"
+
+
+def _clip(text):
+    """Cắt box về [0,1]. Trả về dòng mới, hoặc None nếu box không còn diện tích (hoặc dòng không đọc được)."""
+    try:
+        cid, x, y, w, h = parse_yolo_line(text)
+    except ValueError:
+        return None
+    x1, x2 = max(0.0, x - w / 2), min(1.0, x + w / 2)
+    y1, y2 = max(0.0, y - h / 2), min(1.0, y + h / 2)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return _fmt(cid, (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1)
+
+
+def _remove_image(ds, stem):
+    img = ds.image_path(stem)
+    before = img.name if img else "(không có ảnh)"
+    if img:
+        img.unlink()
+    lp = ds.label_path(stem)
+    if lp.exists():
+        before += f" + {lp.name}"
+        lp.unlink()
+    return dict(image=stem, line="", action="remove_image", before=before, after="(đã xoá)")
+
+
+def _rename_classes(ds, cfg):
+    d = {}
+    if ds.yaml_path.exists():
+        d = yaml.safe_load(ds.yaml_path.read_text(encoding="utf-8")) or {}
+    old = d.get("names")
+    d["names"] = list(cfg["classes"])
+    if "nc" in d:
+        d["nc"] = len(cfg["classes"])
+    ds.yaml_path.write_text(yaml.safe_dump(d, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return dict(image="data.yaml", line="", action="rename_classes", before=str(old), after=str(d["names"]))
+
 
 def fix(ds, issues, cfg):
-    # TODO
-    raise NotImplementedError("autofix chưa làm")
+    errors = [i for i in issues if i.severity == ERROR]
+    fixes = []
+
+    # 1) Lỗi cấp ẢNH: xoá ảnh + nhãn (mỗi ảnh một lần, theo thứ tự tên).
+    removed = set()
+    for stem in sorted({i.image for i in errors if i.code in REMOVE_CODES}):
+        fixes.append(_remove_image(ds, stem))
+        removed.add(stem)
+
+    # 2) Tên lớp trong data.yaml (một lần dù có nhiều issue BAD_CLASS_NAME).
+    if any(i.code == "BAD_CLASS_NAME" for i in errors):
+        fixes.append(_rename_classes(ds, cfg))
+
+    # 3) Ảnh chưa có file nhãn: máy không bịa nhãn, chỉ ghi lại để chuyển người gán.
+    for stem in sorted({i.image for i in errors if i.code == "MISSING_LABEL_FILE"} - removed):
+        if not ds.label_path(stem).exists():
+            fixes.append(dict(image=stem, line="", action="needs_label",
+                              before="(không có file)", after="chuyển người gán"))
+
+    # 4) Lỗi DÒNG: gom theo file -> {số dòng gốc: tập mã lỗi}, rồi ghi file lại MỘT lần.
+    by_file = defaultdict(lambda: defaultdict(set))
+    for i in errors:
+        if i.line is not None and i.code in DROP_CODES | CLIP_CODES and i.image not in removed:
+            by_file[i.image][int(i.line)].add(i.code)
+
+    for stem in sorted(by_file):
+        lp = ds.label_path(stem)
+        if not lp.exists():
+            continue
+        raw = lp.read_text(encoding="utf-8", errors="replace").splitlines()   # giữ cả dòng trống: số dòng = số dòng gốc
+        out, changed = [], False
+        for no, text in enumerate(raw, 1):
+            codes = by_file[stem].get(no)
+            if not codes or not text.strip():
+                out.append(text)
+                continue
+            if codes & DROP_CODES:                       # xoá dòng thắng: không ghi thêm clip_box
+                fixes.append(dict(image=stem, line=no, action="drop_line", before=text, after="(xoá)"))
+                changed = True
+                continue
+            new = _clip(text)                            # chỉ còn BOX_OUT_OF_IMAGE
+            if new is None:                              # nằm hẳn ngoài ảnh: xoá thay vì ghi box rỗng
+                fixes.append(dict(image=stem, line=no, action="drop_line", before=text, after="(xoá: box ngoài ảnh)"))
+                changed = True
+                continue
+            if new != text:
+                fixes.append(dict(image=stem, line=no, action="clip_box", before=text, after=new))
+                changed = True
+            out.append(new)
+        if changed:
+            lp.write_text("".join(ln + "\n" for ln in out), encoding="utf-8")
+
+    return fixes
