@@ -3,16 +3,55 @@
 > Xoá mọi `TODO(học viên)` và dòng gợi ý. Mỗi ý trả lời bằng **số lấy từ `submission/reports/`**, kèm mẫu số. Cả báo cáo ~1–2 trang.
 
 ## 1. Kết luận trước
-TODO(học viên): pipeline kết luận **Release / Hold / Rework**? Bao nhiêu ảnh vào, bao nhiêu ảnh ra dataset? Lý do chính (1–3 câu).
+**HOLD** (mã thoát 10). **224 ảnh vào → 202 ảnh ra** `submission/export/clean_v1` (bản nháp, chưa phát hành); 22 ảnh bị loại ở cửa vào.
+Sau sửa tự động và người duyệt **không còn lỗi bắt buộc** (0 ERROR trong `07_error_list_v3`), nhưng **38/202 ảnh (18,8%)** còn cảnh báo chưa người duyệt, vượt ngưỡng `warn_ratio_hold` 10%.
+Lý do gốc: hàng đợi người duyệt có **125 ảnh** trong khi ngân sách chỉ **80 ảnh** (`08_summary.json`).
 
 ## 2. Lỗi và phân việc
-Lấy từ `02_error_list_v1` (gom theo mã lỗi). Cột "ai sửa": **máy** (autofix) hay **người** (hàng đợi); chỉ ghi những mã có mặt trong lô của bạn.
+Số liệu từ `01_intake` + `02_error_list_v1` (trước khi sửa). Mẫu số: 224 ảnh quét ở cửa vào; 202 ảnh vào QC.
+
+**Lỗi bắt buộc (ERROR) — máy xử lý**
 
 | Mã lỗi | Số ảnh/dòng | Ai sửa (máy/người) | Vì sao |
 |---|---:|---|---|
-| TODO(học viên) | | | |
+| DUP_IMAGE_EXACT | 8 ảnh / 224 | máy (loại ở cửa vào) | trùng từng byte: giữ ảnh đầu, bỏ bản sao (md5 không thể sai) |
+| LEAK_TEST | 5 ảnh / 224 | máy (loại) | trùng ảnh test/gold_val: để lại sẽ làm điểm test bị thổi phồng |
+| DUP_IMAGE_NEAR | 4 ảnh / 224 | máy (loại) | trùng gần đúng (phash ≤ 12); đã mở xem cả 4 cặp đều là cùng ảnh |
+| BAD_SIZE | 3 ảnh / 224 | máy (loại) | cạnh ngắn < 250 px, không dùng được để train |
+| CORRUPT_IMAGE | 2 ảnh / 224 | máy (loại) | không mở được (ảnh cắt cụt chỉ lộ khi `load()`) |
+| BOX_OUT_OF_IMAGE | 8 dòng / 8 ảnh | máy (`clip_box` ×8) | cắt box về [0,1] là an toàn, giữ nguyên lớp |
+| DUP_BOX | 7 dòng / 7 ảnh | máy (`drop_line`) | box lặp cùng lớp IoU > 0.9: xoá bản sau, không mất thông tin |
+| BAD_CLASS_ID | 6 dòng / 6 ảnh | máy (`drop_line`) | id ngoài 0..3: không đoán được lớp đúng nên xoá dòng |
+| BOX_ZERO | 4 dòng / 4 ảnh | máy (`drop_line`) | box rỗng, không có vật |
+| BAD_FORMAT | 3 dòng / 3 ảnh | máy (`drop_line`) | dòng không đọc được |
+| BAD_CLASS_NAME | 2 lỗi / 1 file `data.yaml` | máy (`rename_classes`) | tên lớp có quy tắc cố định trong `cfg["classes"]` |
+| MISSING_LABEL_FILE | 6 ảnh / 202 | **người** (`needs_label`) | máy **không bịa nhãn**; không tạo file rỗng vì rỗng nghĩa là "ảnh nền" |
 
-TODO(học viên): vì sao `05_review_queue.csv` xếp ảnh đầu hàng như vậy? Với ngân sách 80 ảnh, người xem được bao nhiêu lỗi ngữ nghĩa?
+Tổng cộng `03_fixes.csv` ghi **35 thay đổi**: 20 `drop_line`, 8 `clip_box`, 6 `needs_label`, 1 `rename_classes`.
+
+**Cảnh báo (WARN) — người duyệt** (máy chỉ gắn cờ, vì model cũng có thể sai)
+
+| Mã | Số lỗi / số ảnh (trên 202) |
+|---|---|
+| POSSIBLE_MISSING | 53 / 52 |
+| POSSIBLE_FALSE_POS | 29 / 27 |
+| POSSIBLE_LOOSE_BOX | 28 / 24 |
+| POSSIBLE_WRONG_CLASS | 18 / 18 |
+| EMPTY_LABEL | 12 / 12 |
+| BOX_TINY | 6 / 4 |
+| BOX_HUGE | 3 / 3 |
+| CLASS_RARE | 4 (cấp dataset) |
+
+**Hàng đợi `05_review_queue.csv`** xếp ảnh theo tổng `trọng số mã lỗi × (1 + conf)`:
+- Đầu hàng là `img_0020` (11,52 điểm): cùng lúc có WRONG_CLASS, MISSING và một dòng đã bị máy xoá.
+- Tiếp theo là **6 ảnh `NEEDS_LABEL`** (10 điểm mỗi ảnh, trọng số cao nhất): ảnh chưa có nhãn thì chỉ người gán được, và nếu bỏ sót sẽ ra Rework.
+- Sau đó là các ảnh có WRONG_CLASS (trọng số 3) và MISSING / FALSE_POS (2), xếp theo conf của model.
+
+**Với ngân sách 80 ảnh:**
+- Hàng đợi có 125 ảnh, trong đó **103 ảnh có lỗi ngữ nghĩa** (`POSSIBLE_*`). Người duyệt xem được **74/103** ảnh đó.
+- **29 ảnh có lỗi ngữ nghĩa và 45 ảnh trong hàng đợi không ai xem.**
+- Ảnh cuối được duyệt có priority 3,343, ảnh đầu bị bỏ có 3,333. Ranh giới sát nhau như vậy cho thấy ngân sách đang cắt ngang vùng ảnh còn đáng xem.
+- Box theo lớp (`class_stats.csv`): car 101, **person 574**, truck 41, bus 32. Dữ liệu lệch mạnh về person; truck và bus ít.
 
 ## 3. Calibration (2 ngưỡng)
 | Tham số | Khởi đầu | Đã chọn | Precision / Recall (trước → sau) | Lý do (đánh đổi) |
@@ -31,16 +70,32 @@ Nghĩa là precision 1.00 trên calib không bảo đảm precision trên raw. N
 Điểm mù đã biết: img_0084 ↔ img_0074 là cùng ảnh bị cắt mạnh (dist 16), không ngưỡng an toàn nào bắt được.
 
 ## 4. Cửa chặn và điều pipeline KHÔNG bắt được
-TODO(học viên): (a) chứng minh gate chặn đúng: chạy `python -m pipeline.run --budget 0 --reports work/rep_nb --export-dir work/exp_nb` (không có người duyệt nên ảnh thiếu file nhãn còn nguyên), chỉ ra kết luận **Rework**, mã thoát 20 và việc **không xuất** dataset. (Đừng sửa tay `work/run/ds`: pipeline dựng lại thư mục này từ raw mỗi lần chạy.) (b) ≥ 2 điểm mù có bằng chứng (box lỏng nhẹ, nhầm lớp mà model lớn cũng nhầm, ảnh trùng biến đổi mạnh…).
+**(a) Cửa chặn thật sự chặn.** Chạy pipeline không có người duyệt:
+```
+python -m pipeline.run --budget 0 --work work/run_nb --reports work/rep_nb --export-dir work/exp_nb
+```
+- Kết luận **REWORK**, **mã thoát 20**: "còn 6 lỗi bắt buộc (MISSING_LABEL_FILE): phải sửa trước khi xuất".
+  Sáu ảnh đó là img_0031, 0053, 0126, 0135, 0170, 0219; ngoài ra 112/202 ảnh (55,5%) còn cảnh báo.
+- **Không xuất dataset**: log ghi "KHÔNG xuất: còn lỗi bắt buộc (Rework) — trả về bước 3"; `08_summary.json` có `"exported": null`; thư mục `work/exp_nb` không được tạo.
+- So với lần chạy chính (ngân sách 80): người duyệt gán nhãn cho 6 ảnh `NEEDS_LABEL` (đứng đầu hàng đợi) → hết lỗi bắt buộc → kết luận chuyển từ Rework sang Hold.
+- Điều này chứng minh máy không tự "lấp" lỗi thiếu nhãn để qua cửa.
 
-**Lỗi tự nhìn thấy khi xem `viz_labels.py` (Bước 1, trước khi chạy pipeline):**
+**(b) Điểm pipeline KHÔNG bắt được**
+
+Đối chiếu lỗi tự nhìn thấy (Bước 1, `viz_labels.py`) với `02_error_list_v1` (cấu hình đã calibrate, `conf = 0.6`):
 
 | Ảnh | Lỗi quan sát | Loại lỗi | Pipeline có bắt được? |
 |---|---|---|---|
-| `img_0001` | Có người trong ảnh nhưng không được gán box | thiếu nhãn | TODO: đối chiếu `POSSIBLE_MISSING` trong `02_error_list_v1` |
-| `img_0005` | Vật ở góc trái bị gán nhầm thành `person` | gán nhầm vật / box không có thật | TODO: đối chiếu `POSSIBLE_FALSE_POS` / `POSSIBLE_WRONG_CLASS` |
-| `img_0020` | Gán `person` cho ảnh phản chiếu trong gương (người không có thật) | ngữ nghĩa: box sai ý nghĩa | TODO: model lớn có thể cũng thấy "người" trong gương → điểm mù? |
-| `img_0045` | Người bị gán nhầm lớp thành `car` | gán nhầm lớp | TODO: đối chiếu `POSSIBLE_WRONG_CLASS` |
+| `img_0001` | Có người trong ảnh nhưng không được gán box | thiếu nhãn | ✅ `POSSIBLE_MISSING` person, conf 0.95 |
+| `img_0005` | Vật ở góc trái bị gán nhầm thành `person` | gán nhầm vật / box không có thật | ❌ không có cờ nào (cờ MISSING conf 0.30 ở `conf = 0.25` cũng bị lọc ở 0.6) |
+| `img_0020` | Gán `person` cho ảnh phản chiếu trong gương (người không có thật) | ngữ nghĩa: box sai ý nghĩa | ❌ không có `FALSE_POS` cho người trong gương: model cũng "thấy" người ở đó. Ảnh vẫn lên đầu hàng đợi nhờ lỗi khác (WRONG_CLASS truck→bus). |
+| `img_0045` | Người bị gán nhầm lớp thành `car` | gán nhầm lớp | ⚠️ chỉ có `POSSIBLE_LOOSE_BOX` person (IoU 0.33), không có `WRONG_CLASS` |
+
+Các điểm mù có bằng chứng:
+1. **Lỗi ngữ nghĩa mà model lớn cũng mắc** (img_0020, người trong gương). `second_opinion` chỉ cờ khi nhãn và model *bất đồng*; khi cả hai cùng sai thì im lặng. Chỉ người mới bắt được.
+2. **Box sai mà model vẫn thấy "có gì đó" ở đó** (img_0005). FALSE_POS chỉ bật khi box nhãn không khớp *bất kỳ* dự đoán nào có conf ≥ `fp_conf` 0.1. Một dự đoán yếu chồng lên là đủ để box sai qua mặt.
+3. **Ảnh trùng biến đổi mạnh** (img_0084 ↔ img_0074, cùng ảnh bị cắt, phash dist 16). Không bị loại vì nâng `phash_dist` lên 16 sẽ gộp nhầm 8 cặp ảnh khác (xem §3).
+4. **Ngân sách duyệt**: 29 ảnh có lỗi ngữ nghĩa nằm ngoài 80 ảnh được xem. Lỗi trên các ảnh này đi thẳng vào dataset nếu ép Release.
 
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
 Chưa train: ghi "chưa chạy" và lý do, rồi bỏ qua phần còn lại của mục này. Nếu đã train: dán bảng từ `submission/results/comparison.md` (model, epoch, seed, số ảnh train mỗi biến thể).
